@@ -21,12 +21,12 @@ var strictUnmarshalOptions = &UnmarshalOptions{
 	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: false},
 }
 
-func Unmarshal(q url.Values, data any) error {
-	return defaultUnmarshalOptions.Unmarshal(q, data)
+func Unmarshal(q url.Values, val any) error {
+	return defaultUnmarshalOptions.Unmarshal(q, val)
 }
 
-func UnmarshalStrict(q url.Values, data any) error {
-	return strictUnmarshalOptions.Unmarshal(q, data)
+func UnmarshalStrict(q url.Values, val any) error {
+	return strictUnmarshalOptions.Unmarshal(q, val)
 }
 
 type UnmarshalOptions struct {
@@ -34,8 +34,15 @@ type UnmarshalOptions struct {
 	ProtoOptions proto.UnmarshalOptions
 }
 
-func (u *UnmarshalOptions) Unmarshal(query url.Values, value any) error {
-	refv := reflect.ValueOf(value)
+func (u *UnmarshalOptions) Unmarshal(query url.Values, val any) error {
+	// backwards compatibility: entire message is specified in q parameter
+	if q := query["q"]; len(q) > 0 {
+		if m, ok := val.(proto.Message); ok {
+			return u.ProtoOptions.Unmarshal([]byte(q[0]), m)
+		}
+	}
+
+	refv := reflect.ValueOf(val)
 	if refv.Kind() != reflect.Ptr {
 		return fmt.Errorf("data must be a pointer to a struct")
 	}
@@ -62,11 +69,6 @@ func (u *UnmarshalOptions) Unmarshal(query url.Values, value any) error {
 		if err := u.setFieldValue(value, query[param]); err != nil {
 			return fmt.Errorf("error setting field %s: %w", reft.Field(i).Name, err)
 		}
-	}
-
-	// for backwards compatibility entire query might be provided in q parameter
-	if q, ok := query["q"]; ok && len(q) > 0 {
-		_ = u.unmarshalValue([]byte(q[0]), value)
 	}
 
 	return nil
