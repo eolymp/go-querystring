@@ -8,17 +8,18 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 var defaultUnmarshalOptions = &UnmarshalOptions{
 	StructTag:    "json",
-	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: true},
+	ProtoOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
 }
 
 var strictUnmarshalOptions = &UnmarshalOptions{
 	StructTag:    "json",
-	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: false},
+	ProtoOptions: protojson.UnmarshalOptions{DiscardUnknown: false},
 }
 
 func Unmarshal(q url.Values, val any) error {
@@ -31,12 +32,16 @@ func UnmarshalStrict(q url.Values, val any) error {
 
 type UnmarshalOptions struct {
 	StructTag    string
-	ProtoOptions proto.UnmarshalOptions
+	ProtoOptions protojson.UnmarshalOptions
 }
 
 func (u *UnmarshalOptions) Unmarshal(query url.Values, val any) error {
 	// backwards compatibility: entire message is specified in q parameter
 	if q := query["q"]; len(q) > 0 {
+		if q[0] == "" {
+			return nil
+		}
+
 		if m, ok := val.(proto.Message); ok {
 			return u.ProtoOptions.Unmarshal([]byte(q[0]), m)
 		}
