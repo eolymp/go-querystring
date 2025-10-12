@@ -16,8 +16,17 @@ var defaultUnmarshalOptions = &UnmarshalOptions{
 	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: true},
 }
 
+var strictUnmarshalOptions = &UnmarshalOptions{
+	StructTag:    "json",
+	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: false},
+}
+
 func Unmarshal(q url.Values, data any) error {
 	return defaultUnmarshalOptions.Unmarshal(q, data)
+}
+
+func UnmarshalStrict(q url.Values, data any) error {
+	return strictUnmarshalOptions.Unmarshal(q, data)
 }
 
 type UnmarshalOptions struct {
