@@ -7,18 +7,25 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+
+	"google.golang.org/protobuf/proto"
 )
 
+var defaultUnmarshalOptions = &UnmarshalOptions{
+	StructTag:    "json",
+	ProtoOptions: proto.UnmarshalOptions{DiscardUnknown: true},
+}
+
 func Unmarshal(q url.Values, data any) error {
-	return (&Unmarshaler{StructTag: "json", Unmarshaller: json.Unmarshal}).Unmarshal(q, data)
+	return defaultUnmarshalOptions.Unmarshal(q, data)
 }
 
-type Unmarshaler struct {
+type UnmarshalOptions struct {
 	StructTag    string
-	Unmarshaller func([]byte, any) error
+	ProtoOptions proto.UnmarshalOptions
 }
 
-func (u *Unmarshaler) Unmarshal(query url.Values, value any) error {
+func (u *UnmarshalOptions) Unmarshal(query url.Values, value any) error {
 	refv := reflect.ValueOf(value)
 	if refv.Kind() != reflect.Ptr {
 		return fmt.Errorf("data must be a pointer to a struct")
@@ -50,13 +57,13 @@ func (u *Unmarshaler) Unmarshal(query url.Values, value any) error {
 
 	// for backwards compatibility entire query might be provided in q parameter
 	if q, ok := query["q"]; ok && len(q) > 0 {
-		_ = u.Unmarshaller([]byte(q[0]), value)
+		_ = u.unmarshalValue([]byte(q[0]), value)
 	}
 
 	return nil
 }
 
-func (u *Unmarshaler) queryParamName(field reflect.StructField) string {
+func (u *UnmarshalOptions) queryParamName(field reflect.StructField) string {
 	if val := field.Tag.Get(u.StructTag); val != "" {
 		return strings.Split(val, ",")[0]
 	}
@@ -64,7 +71,7 @@ func (u *Unmarshaler) queryParamName(field reflect.StructField) string {
 	return field.Name
 }
 
-func (u *Unmarshaler) setFieldValue(fv reflect.Value, values []string) error {
+func (u *UnmarshalOptions) setFieldValue(fv reflect.Value, values []string) error {
 	ft := fv.Type()
 
 	if ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
@@ -116,7 +123,7 @@ func (u *Unmarshaler) setFieldValue(fv reflect.Value, values []string) error {
 	return nil
 }
 
-func (u *Unmarshaler) setSliceValue(fv reflect.Value, values []string) error {
+func (u *UnmarshalOptions) setSliceValue(fv reflect.Value, values []string) error {
 	slice := reflect.MakeSlice(fv.Type(), len(values), len(values))
 
 	for index, value := range values {
@@ -170,7 +177,7 @@ func (u *Unmarshaler) setSliceValue(fv reflect.Value, values []string) error {
 	return nil
 }
 
-func (u *Unmarshaler) setComplexValue(fv reflect.Value, value string) error {
+func (u *UnmarshalOptions) setComplexValue(fv reflect.Value, value string) error {
 	if fv.Kind() == reflect.Ptr {
 		if fv.IsNil() {
 			fv.Set(reflect.New(fv.Type().Elem()))
@@ -179,5 +186,13 @@ func (u *Unmarshaler) setComplexValue(fv reflect.Value, value string) error {
 		fv = fv.Elem()
 	}
 
-	return u.Unmarshaller([]byte(value), fv.Addr().Interface())
+	return u.unmarshalValue([]byte(value), fv.Addr().Interface())
+}
+
+func (u *UnmarshalOptions) unmarshalValue(data []byte, value any) error {
+	if m, ok := value.(proto.Message); ok {
+		return u.ProtoOptions.Unmarshal(data, m)
+	}
+
+	return json.Unmarshal(data, value)
 }

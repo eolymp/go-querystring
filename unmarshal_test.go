@@ -351,7 +351,7 @@ func TestUnmarshaler_CustomStructTag(t *testing.T) {
 	}
 
 	var got TestStruct
-	if err := (&Unmarshaler{StructTag: "query"}).Unmarshal(query, &got); err != nil {
+	if err := (&UnmarshalOptions{StructTag: "query"}).Unmarshal(query, &got); err != nil {
 		t.Fatalf("Unmarshal failed: %v", err)
 	}
 
