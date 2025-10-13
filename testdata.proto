@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package eolymp.testdata;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/eolymp/go-querystring/querystring;querystring_test";
+
+message TestData {
+  // Sample enumeration
+  enum Enumeration {
+    ONE = 0;
+    TWO = 1;
+    THREE = 2;
+  }
+
+  // Structure with simple properties
+  message FlatStruct {
+    string string_value = 1;
+    Enumeration enum_value = 2;
+    google.protobuf.Timestamp timestamp_value = 3;
+
+    repeated string string_values = 11;
+    repeated Enumeration enum_values = 12;
+    repeated google.protobuf.Timestamp timestamp_values = 13;
+  }
+
+  // Structure nested with other structures
+  message ComplexStruct {
+    string string_value = 1;
+    Enumeration enum_value = 2;
+    FlatStruct flat_struct = 3;
+
+    repeated string string_values = 11;
+    repeated Enumeration enum_values = 12;
+    repeated FlatStruct flat_structs = 13;
+
+    map<string, string> map_value = 21;
+  }
+
+  string string_value = 1;
+  int32 int32_value = 2;
+  uint32 uint32_value = 3;
+  bool bool_value = 4;
+  float float_value = 5;
+  FlatStruct flat_struct = 6;
+  ComplexStruct complex_struct = 7;
+  Enumeration enum_value = 8;
+  google.protobuf.Timestamp timestamp_value = 9;
+
+  repeated string string_values = 11;
+  repeated int32 int32_values = 12;
+  repeated uint32 uint32_values = 13;
+  repeated bool bool_values = 14;
+  repeated float float_values = 15;
+  repeated FlatStruct flat_structs = 16;
+  repeated ComplexStruct complex_structs = 17;
+  repeated Enumeration enum_values = 18;
+  repeated google.protobuf.Timestamp timestamp_values = 19;
+
+  map<string, string> map_value = 21;
+}

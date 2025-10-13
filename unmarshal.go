@@ -1,214 +1,191 @@
 package querystring
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
-	"reflect"
 	"strconv"
-	"strings"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var defaultUnmarshalOptions = &UnmarshalOptions{
-	StructTag:    "json",
-	ProtoOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
+var defaultOpts = UnmarshalOptions{ProtoOptions: protojson.UnmarshalOptions{DiscardUnknown: true}}
+var strictOpts = UnmarshalOptions{ProtoOptions: protojson.UnmarshalOptions{}}
+
+func Unmarshal(q url.Values, msg proto.Message) error {
+	return defaultOpts.Unmarshal(q, msg)
 }
 
-var strictUnmarshalOptions = &UnmarshalOptions{
-	StructTag:    "json",
-	ProtoOptions: protojson.UnmarshalOptions{DiscardUnknown: false},
-}
-
-func Unmarshal(q url.Values, val any) error {
-	return defaultUnmarshalOptions.Unmarshal(q, val)
-}
-
-func UnmarshalStrict(q url.Values, val any) error {
-	return strictUnmarshalOptions.Unmarshal(q, val)
+func UnmarshalStrict(q url.Values, msg proto.Message) error {
+	return strictOpts.Unmarshal(q, msg)
 }
 
 type UnmarshalOptions struct {
-	StructTag    string
 	ProtoOptions protojson.UnmarshalOptions
 }
 
-func (u *UnmarshalOptions) Unmarshal(query url.Values, val any) error {
+func (u UnmarshalOptions) Unmarshal(query url.Values, msg proto.Message) error {
 	// backwards compatibility: entire message is specified in q parameter
 	if q := query["q"]; len(q) > 0 {
 		if q[0] == "" {
 			return nil
 		}
 
-		if m, ok := val.(proto.Message); ok {
-			return u.ProtoOptions.Unmarshal([]byte(q[0]), m)
-		}
+		return u.ProtoOptions.Unmarshal([]byte(q[0]), msg)
 	}
 
-	refv := reflect.ValueOf(val)
-	if refv.Kind() != reflect.Ptr {
-		return fmt.Errorf("data must be a pointer to a struct")
-	}
+	ref := msg.ProtoReflect()
+	fields := ref.Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
 
-	refv = refv.Elem()
-	if refv.Kind() != reflect.Struct {
-		return fmt.Errorf("data must be a pointer to a struct")
-	}
-
-	reft := refv.Type()
-
-	for i := 0; i < reft.NumField(); i++ {
-		value := refv.Field(i)
-
-		if !value.CanSet() {
-			continue
-		}
-
-		param := u.queryParamName(reft.Field(i))
-		if param == "-" {
-			continue
-		}
-
-		if err := u.setFieldValue(value, query[param]); err != nil {
-			return fmt.Errorf("error setting field %s: %w", reft.Field(i).Name, err)
+		if err := u.setField(ref, field, query[string(field.Name())]); err != nil {
+			return fmt.Errorf("invalid value for %s: %w", field.Name(), err)
 		}
 	}
 
 	return nil
 }
 
-func (u *UnmarshalOptions) queryParamName(field reflect.StructField) string {
-	if val := field.Tag.Get(u.StructTag); val != "" {
-		return strings.Split(val, ",")[0]
-	}
-
-	return field.Name
-}
-
-func (u *UnmarshalOptions) setFieldValue(fv reflect.Value, values []string) error {
-	ft := fv.Type()
-
-	if ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
-		return u.setSliceValue(fv, values)
-	}
-
+// setField sets a single proto field from query values
+func (u UnmarshalOptions) setField(msg protoreflect.Message, field protoreflect.FieldDescriptor, values []string) error {
 	if len(values) == 0 {
 		return nil
 	}
 
-	value := values[0]
+	switch {
+	case field.IsList():
+		list := msg.Mutable(field).List()
 
-	switch ft.Kind() {
-	case reflect.String:
-		fv.SetString(value)
-
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		val, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return fmt.Errorf("cannot parse %q as int: %w", value, err)
-		}
-
-		fv.SetInt(val)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		val, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return fmt.Errorf("cannot parse %q as uint: %w", value, err)
-		}
-
-		fv.SetUint(val)
-	case reflect.Float32, reflect.Float64:
-		val, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return fmt.Errorf("cannot parse %q as float: %w", value, err)
-		}
-
-		fv.SetFloat(val)
-	case reflect.Bool:
-		val, err := strconv.ParseBool(value)
-		if err != nil {
-			return fmt.Errorf("cannot parse %q as bool: %w", value, err)
-		}
-
-		fv.SetBool(val)
-	default:
-		return u.setComplexValue(fv, value)
-	}
-
-	return nil
-}
-
-func (u *UnmarshalOptions) setSliceValue(fv reflect.Value, values []string) error {
-	slice := reflect.MakeSlice(fv.Type(), len(values), len(values))
-
-	for index, value := range values {
-		element := slice.Index(index)
-
-		switch fv.Type().Elem().Kind() {
-		case reflect.String:
-			element.SetString(value)
-
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			val, err := strconv.ParseInt(value, 10, 64)
+		for _, value := range values {
+			val, err := u.toProtoValue(msg, field, value)
 			if err != nil {
-				return fmt.Errorf("cannot parse %q as int: %w", value, err)
-			}
-
-			element.SetInt(val)
-
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			val, err := strconv.ParseUint(value, 10, 64)
-			if err != nil {
-				return fmt.Errorf("cannot parse %q as uint: %w", value, err)
-			}
-
-			element.SetUint(val)
-
-		case reflect.Float32, reflect.Float64:
-			val, err := strconv.ParseFloat(value, 64)
-			if err != nil {
-				return fmt.Errorf("cannot parse %q as float: %w", value, err)
-			}
-
-			element.SetFloat(val)
-
-		case reflect.Bool:
-			val, err := strconv.ParseBool(value)
-			if err != nil {
-				return fmt.Errorf("cannot parse %q as bool: %w", value, err)
-			}
-
-			element.SetBool(val)
-
-		default:
-			if err := u.setComplexValue(element, value); err != nil {
 				return err
 			}
-		}
-	}
 
-	fv.Set(slice)
+			list.Append(val)
+		}
+
+	default:
+		value, err := u.toProtoValue(msg, field, values[len(values)-1])
+		if err != nil {
+			return err
+		}
+
+		msg.Set(field, value)
+	}
 
 	return nil
 }
 
-func (u *UnmarshalOptions) setComplexValue(fv reflect.Value, value string) error {
-	if fv.Kind() == reflect.Ptr {
-		if fv.IsNil() {
-			fv.Set(reflect.New(fv.Type().Elem()))
+// toProtoValue converts a string value to the appropriate protoreflect.Value
+func (u UnmarshalOptions) toProtoValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, value string) (protoreflect.Value, error) {
+	switch field.Kind() {
+	case protoreflect.StringKind:
+		return protoreflect.ValueOfString(value), nil
+
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
+		val, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as int32: %w", value, err)
+		}
+		return protoreflect.ValueOfInt32(int32(val)), nil
+
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		val, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as int64: %w", value, err)
+		}
+		return protoreflect.ValueOfInt64(val), nil
+
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		val, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as uint32: %w", value, err)
+		}
+		return protoreflect.ValueOfUint32(uint32(val)), nil
+
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		val, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as uint64: %w", value, err)
 		}
 
-		fv = fv.Elem()
+		return protoreflect.ValueOfUint64(val), nil
+
+	case protoreflect.FloatKind:
+		val, err := strconv.ParseFloat(value, 32)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as float32: %w", value, err)
+		}
+
+		return protoreflect.ValueOfFloat32(float32(val)), nil
+
+	case protoreflect.DoubleKind:
+		val, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as float64: %w", value, err)
+		}
+
+		return protoreflect.ValueOfFloat64(val), nil
+
+	case protoreflect.BoolKind:
+		val, err := strconv.ParseBool(value)
+		if err != nil {
+			return protoreflect.Value{}, fmt.Errorf("cannot parse %q as bool: %w", value, err)
+		}
+
+		return protoreflect.ValueOfBool(val), nil
+
+	case protoreflect.EnumKind:
+		// Try to parse as enum number first, then as enum name
+		if val, err := strconv.ParseInt(value, 10, 32); err == nil {
+			return protoreflect.ValueOfEnum(protoreflect.EnumNumber(val)), nil
+		} else {
+			opts := field.Enum().Values()
+			for i := 0; i < opts.Len(); i++ {
+				opt := opts.Get(i)
+				if string(opt.Name()) == value {
+					return protoreflect.ValueOfEnum(opt.Number()), nil
+				}
+			}
+
+			return protoreflect.Value{}, fmt.Errorf("unknown enum value %q for field %s", value, field.Name())
+		}
+
+	case protoreflect.MessageKind:
+		switch field.Message().FullName() {
+		case "google.protobuf.Timestamp":
+			ts, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				return protoreflect.Value{}, fmt.Errorf("cannot parse %q as timestamp: %w", value, err)
+			}
+
+			return protoreflect.ValueOfMessage(timestamppb.New(ts).ProtoReflect()), nil
+
+		default:
+			var sub protoreflect.Message
+			switch {
+			case field.IsList():
+				sub = msg.NewField(field).List().NewElement().Message()
+			default:
+				sub = msg.NewField(field).Message()
+			}
+
+			if err := u.ProtoOptions.Unmarshal([]byte(value), sub.Interface()); err != nil {
+				return protoreflect.Value{}, fmt.Errorf("cannot unmarshal message field %s: %w", field.Name(), err)
+			}
+
+			return protoreflect.ValueOfMessage(sub), nil
+		}
+
+	case protoreflect.BytesKind:
+		return protoreflect.ValueOfBytes([]byte(value)), nil
+
+	default:
+		return protoreflect.Value{}, fmt.Errorf("unsupported proto field kind: %s", field.Kind())
 	}
-
-	return u.unmarshalValue([]byte(value), fv.Addr().Interface())
-}
-
-func (u *UnmarshalOptions) unmarshalValue(data []byte, value any) error {
-	if m, ok := value.(proto.Message); ok {
-		return u.ProtoOptions.Unmarshal(data, m)
-	}
-
-	return json.Unmarshal(data, value)
 }
